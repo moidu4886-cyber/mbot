@@ -3,6 +3,9 @@ from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from config import *
 from database import users, files, plans
 
+import asyncio
+from aiohttp import web
+
 app = Client("bot", bot_token=BOT_TOKEN, api_id=API_ID, api_hash=API_HASH)
 
 # =========================
@@ -71,7 +74,7 @@ async def pay(client, query):
 
 
 # =========================
-# UNLOCK
+# UNLOCK SYSTEM
 # =========================
 user_plan_wait = {}
 
@@ -91,6 +94,8 @@ async def check_code(client, message):
         return
 
     code = message.text.strip()
+
+    # Find plan using code
     plan_data = await plans.find_one({"codes": code})
 
     if not plan_data:
@@ -101,6 +106,7 @@ async def check_code(client, message):
 
     await message.reply("Access granted ✅ Sending files...")
 
+    # Send all files of that plan
     async for file in files.find({"plan": plan_id}):
 
         await client.copy_message(
@@ -168,7 +174,7 @@ async def broadcast(client, message):
 
 
 # =========================
-# INIT PLANS (RUN ONCE)
+# SETUP PLANS (RUN ONCE)
 # =========================
 @app.on_message(filters.command("setup") & filters.user(ADMIN_IDS))
 async def setup_plans(client, message):
@@ -191,4 +197,29 @@ async def setup_plans(client, message):
 
 
 # =========================
-app.run()
+# WEB SERVER (KOYEB FIX)
+# =========================
+async def handle(request):
+    return web.Response(text="Bot is running ✅")
+
+async def start_web():
+    web_app = web.Application()
+    web_app.router.add_get("/", handle)
+    runner = web.AppRunner(web_app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", 8000)
+    await site.start()
+
+
+# =========================
+# MAIN RUN
+# =========================
+async def main():
+    await app.start()
+    await start_web()
+    print("Bot Started ✅")
+    await asyncio.Event().wait()
+
+
+if __name__ == "__main__":
+    asyncio.run(main())

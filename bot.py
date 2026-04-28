@@ -6,7 +6,6 @@ from pyrogram.errors import UserIsBlocked, InputUserDeactivated, FloodWait
 from aiohttp import web
 
 # --- CONFIG & DATABASE ---
-# Koyeb Environment Variables-ൽ നിന്ന് ബാക്കി വിവരങ്ങൾ എടുക്കുന്നു
 try:
     from config import *
     from database import users, files, plans
@@ -16,8 +15,7 @@ except ImportError:
     BOT_TOKEN = os.environ.get("BOT_TOKEN", "8532782504:AAFTrD-xzud3XANvY_j24G-G_...")
 
 # --- FIXED ADMIN ID ---
-# നിങ്ങളുടെ ഐഡി ഇവിടെ നേരിട്ട് നൽകിയിരിക്കുന്നു.
-ADMIN_IDS = [7207674086]
+MY_ID = 7207674086 
 
 # Bot initialization
 app = Client("bot", bot_token=BOT_TOKEN, api_id=API_ID, api_hash=API_HASH)
@@ -29,7 +27,7 @@ edit_state = {}
 # ---------------- WEB SERVER (For Koyeb Health Check) ----------------
 
 async def handle_web(request):
-    return web.Response(text="Bot is running perfectly on port 8000!")
+    return web.Response(text="Bot Status: Online and Healthy")
 
 async def web_server():
     server = web.Application()
@@ -40,27 +38,18 @@ async def web_server():
     await site.start()
     print("✅ Web Server started on port 8000")
 
-# ---------------- HELPER FUNCTIONS ----------------
-
-def is_admin(user_id):
-    return user_id in ADMIN_IDS
-
-async def get_support_id():
-    settings = await plans.find_one({"plan_id": "settings"})
-    return settings.get("support_id", "@Admin") if settings else "@Admin"
-
 # ---------------- START MENU ----------------
 
 @app.on_message(filters.command("start") & filters.private)
 async def start(client, message):
     user_id = message.from_user.id
-    # Add user to DB
     await users.update_one({"user_id": user_id}, {"$set": {"active": True}}, upsert=True)
     
     if user_id in user_wait: del user_wait[user_id]
     if user_id in edit_state: del edit_state[user_id]
         
-    support_id = await get_support_id()
+    settings = await plans.find_one({"plan_id": "settings"})
+    support_id = settings.get("support_id", "@Admin") if settings else "@Admin"
     support_url = f"https://t.me/{support_id.replace('@','')}"
 
     buttons = InlineKeyboardMarkup([
@@ -106,7 +95,7 @@ async def plan_unlock(client, query):
         await query.message.edit_text(text, reply_markup=buttons)
     else:
         user_wait[query.from_user.id] = pid 
-        await query.message.reply(f"🔑 **Send Unlock Code for Plan {pid}:**\n(Or send /start to cancel)")
+        await query.message.reply(f"🔑 **Send Unlock Code for Plan {pid}:**")
 
 # ---------------- TEXT HANDLER (ADMIN & USER) ----------------
 
@@ -116,7 +105,7 @@ async def handle_text(client, message):
     if message.text.startswith("/"): return
 
     # 1. ADMIN EDIT LOGIC
-    if is_admin(user_id) and user_id in edit_state:
+    if user_id == MY_ID and user_id in edit_state:
         action, pid = edit_state[user_id]
         val = message.text.strip()
         if pid == "settings":
@@ -144,43 +133,39 @@ async def handle_text(client, message):
                 except: pass
             del user_wait[user_id]
         else:
-            await message.reply("❌ **Invalid Code!** Try again or contact admin.")
+            await message.reply("❌ **Invalid Code!**")
     else:
-        if not is_admin(user_id):
+        if user_id != MY_ID:
             await message.reply("❓ Please select a plan and click **Unlock** first.")
 
-# ---------------- ADMIN COMMANDS (SECURE) ----------------
+# ---------------- ADMIN COMMANDS (STRICT FILTER) ----------------
 
-@app.on_message(filters.command(["setup", "init", "index"]) & filters.private)
-async def admin_cmds(client, message):
-    if not is_admin(message.from_user.id):
-        return await message.reply("❌ **Access Denied!** You are not an admin.")
+@app.on_message(filters.command("setup") & filters.user(MY_ID))
+async def setup_cmd(client, message):
+    buttons = [[InlineKeyboardButton(f"⚙️ Manage Plan {i}", callback_data=f"edit_{i}")] for i in range(1, 5)]
+    buttons.append([InlineKeyboardButton("👤 Global Support ID", callback_data="set_global_admin")])
+    await message.reply("🛠 **Admin Control Panel**", reply_markup=InlineKeyboardMarkup(buttons))
 
-    cmd = message.command[0]
+@app.on_message(filters.command("init") & filters.user(MY_ID))
+async def init_cmd(client, message):
+    for i in range(1, 5):
+        await plans.update_one({"plan_id": i}, {"$setOnInsert": {"plan_id": i, "text": f"Plan {i}", "price": "₹0", "contact": "@Admin", "codes": []}}, upsert=True)
+    await plans.update_one({"plan_id": "settings"}, {"$setOnInsert": {"support_id": "@Admin"}}, upsert=True)
+    await message.reply("✅ **Database Initialized!**")
 
-    if cmd == "setup":
-        buttons = [[InlineKeyboardButton(f"⚙️ Manage Plan {i}", callback_data=f"edit_{i}")] for i in range(1, 5)]
-        buttons.append([InlineKeyboardButton("👤 Global Support ID", callback_data="set_global_admin")])
-        await message.reply("🛠 **Admin Control Panel**", reply_markup=InlineKeyboardMarkup(buttons))
-
-    elif cmd == "init":
-        for i in range(1, 5):
-            await plans.update_one({"plan_id": i}, {"$setOnInsert": {"plan_id": i, "text": f"Plan {i}", "price": "₹0", "contact": "@Admin", "codes": []}}, upsert=True)
-        await plans.update_one({"plan_id": "settings"}, {"$setOnInsert": {"support_id": "@Admin"}}, upsert=True)
-        await message.reply("✅ **Database Initialized!** All plans are ready.")
-
-    elif cmd == "index":
-        if not message.reply_to_message or len(message.command) < 2:
-            return await message.reply("Reply to a file/message with `/index 1` (where 1 is Plan ID)")
-        pid = int(message.command[1])
-        await files.insert_one({"plan": pid, "chat_id": message.reply_to_message.chat.id, "message_id": message.reply_to_message.id})
-        await message.reply(f"✅ File indexed to **Plan {pid}**")
+@app.on_message(filters.command("index") & filters.user(MY_ID))
+async def index_cmd(client, message):
+    if not message.reply_to_message or len(message.command) < 2:
+        return await message.reply("Reply to a file with `/index 1`")
+    pid = int(message.command[1])
+    await files.insert_one({"plan": pid, "chat_id": message.reply_to_message.chat.id, "message_id": message.reply_to_message.id})
+    await message.reply(f"✅ File indexed to **Plan {pid}**")
 
 # ---------------- ADMIN CALLBACKS ----------------
 
 @app.on_callback_query(filters.regex("^edit_|^set_|^add_code_|^back_admin"))
 async def admin_callbacks(client, query):
-    if not is_admin(query.from_user.id): return
+    if query.from_user.id != MY_ID: return
     await query.answer()
     data = query.data
 
@@ -188,26 +173,26 @@ async def admin_callbacks(client, query):
         pid = int(data.split("_")[1])
         buttons = InlineKeyboardMarkup([
             [InlineKeyboardButton("Edit Text", callback_data=f"set_text_{pid}"), InlineKeyboardButton("Edit Price", callback_data=f"set_price_{pid}")],
-            [InlineKeyboardButton("➕ Add Unlock Code", callback_data=f"add_code_{pid}")],
+            [InlineKeyboardButton("➕ Add Code", callback_data=f"add_code_{pid}")],
             [InlineKeyboardButton("🔙 Back", callback_data="back_admin")]
         ])
         await query.message.edit_text(f"⚙️ **Managing Plan {pid}**", reply_markup=buttons)
     elif data == "back_admin":
-        await admin_cmds(client, query.message)
+        await setup_cmd(client, query.message)
         await query.message.delete()
     elif "set_" in data or "add_code_" in data:
         s = data.split("_")
         action = s[1] if "set" in data else "add_code"
         pid = int(s[2])
         edit_state[query.from_user.id] = (action, pid)
-        await query.message.reply(f"💬 Please send the new value for **{action}**:")
+        await query.message.reply(f"💬 Send the new value for **{action}**:")
 
 # ---------------- RUNNER ----------------
 
 async def main():
     await web_server()
     await app.start()
-    print("🚀 BOT IS LIVE AND RUNNING")
+    print("🚀 BOT IS LIVE")
     await idle()
     await app.stop()
 

@@ -212,14 +212,15 @@ async def start_web():
 
 
 # =========================
-# MAIN RUN
+# MAIN RUN (FINAL FIX)
 # =========================
+from pyrogram import idle
+
 async def main():
     await app.start()
     await start_web()
     print("Bot Started ✅")
-    await asyncio.Event().wait()
-
+    await idle()
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    app.run(main())
